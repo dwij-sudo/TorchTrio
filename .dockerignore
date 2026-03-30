@@ -1,0 +1,21 @@
+# Keep Docker build context small for HF Spaces
+.venv/
+venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.log
+.cache/
+pytest_cache/
+.mypy_cache/
+.ipynb_checkpoints/
+.DS_Store
+.git/
+.gitignore
+node_modules/
+build/
+dist/
+.eggs/
+*.egg-info/
+.env

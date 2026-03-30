@@ -1,0 +1,83 @@
+[
+  {
+    "id": "T1",
+    "text": "Payment deducted but order not confirmed. Please fix this quickly.",
+    "sentiment": "angry",
+    "category": "billing",
+    "response_keywords": ["refund", "confirm", "investigating"],
+    "escalation": "tier1",
+    "priority": "high"
+  },
+  {
+    "id": "T2",
+    "text": "App crashes on login when I use my corporate account.",
+    "sentiment": "negative",
+    "category": "technical",
+    "response_keywords": ["crash", "login", "logs"],
+    "escalation": "tier2",
+    "priority": "high"
+  },
+  {
+    "id": "T3",
+    "text": "How do I change my email address on file?",
+    "sentiment": "neutral",
+    "category": "general",
+    "response_keywords": ["email", "settings", "profile"],
+    "escalation": "none",
+    "priority": "medium"
+  },
+  {
+    "id": "T4",
+    "text": "Reports export is timing out with 504 gateway errors.",
+    "sentiment": "negative",
+    "category": "technical",
+    "response_keywords": ["504", "retry", "investigate"],
+    "escalation": "tier2",
+    "priority": "high"
+  },
+  {
+    "id": "T5",
+    "text": "Please cancel my subscription effective immediately.",
+    "sentiment": "neutral",
+    "category": "billing",
+    "response_keywords": ["cancel", "subscription", "confirm"],
+    "escalation": "none",
+    "priority": "medium"
+  },
+  {
+    "id": "T6",
+    "text": "Security issue: I saw an unfamiliar login from abroad.",
+    "sentiment": "angry",
+    "category": "technical",
+    "response_keywords": ["security", "lock", "investigate"],
+    "escalation": "tier3",
+    "priority": "urgent"
+  },
+  {
+    "id": "T7",
+    "text": "Feature request: allow scheduled weekly reports to my inbox.",
+    "sentiment": "positive",
+    "category": "general",
+    "response_keywords": ["feature", "roadmap", "feedback"],
+    "escalation": "none",
+    "priority": "low"
+  },
+  {
+    "id": "T8",
+    "text": "Billing address update keeps failing on the portal.",
+    "sentiment": "negative",
+    "category": "billing",
+    "response_keywords": ["address", "update", "portal"],
+    "escalation": "tier1",
+    "priority": "medium"
+  },
+  {
+    "id": "T9",
+    "text": "Major outage: users see a blank screen on homepage.",
+    "sentiment": "angry",
+    "category": "technical",
+    "response_keywords": ["outage", "investigating", "status"],
+    "escalation": "tier3",
+    "priority": "urgent"
+  }
+]

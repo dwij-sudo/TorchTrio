@@ -1,0 +1,22 @@
+# Exclude heavy/local files from HF Spaces upload
+.venv/
+venv/
+lib/
+Lib/
+Scripts/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.cache/
+pytest_cache/
+.mypy_cache/
+.ipynb_checkpoints/
+.DS_Store
+Thumbs.db
+node_modules/
+build/
+dist/
+.eggs/
+*.egg-info/
+.env
