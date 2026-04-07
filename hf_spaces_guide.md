@@ -11,14 +11,13 @@
 3) Set environment variables (Settings → Variables) — copy/paste
 ```
 API_BASE_URL=https://api.openai.com/v1
+API_KEY=sk-REPLACE_ME
 MODEL_NAME=gpt-4o-mini
-OPENAI_API_KEY=sk-REPLACE_ME
-API_KEY=
 HF_TOKEN=
 PORT=7860
 ```
 Notes:
-- Use either OPENAI_API_KEY or API_KEY depending on your provider.
+- For LiteLLM/OpenAI-compatible proxies, use `API_BASE_URL` and `API_KEY`.
 - HF_TOKEN only if your endpoint/model is gated via HF; otherwise leave blank.
 
 4) Build & run

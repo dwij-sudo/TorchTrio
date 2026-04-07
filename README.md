@@ -68,7 +68,7 @@ obs, reward, done, info = env.step({"action_type": "classify_ticket", "category"
 ```bash
 python inference.py
 ```
-Outputs JSON scores for easy/medium/hard using heuristic classification and optional OpenAI responses (`API_BASE_URL`, `MODEL_NAME`, `HF_TOKEN`, `OPENAI_API_KEY`).
+Outputs JSON scores for easy/medium/hard using heuristic classification and optional OpenAI responses (`API_BASE_URL`, `API_KEY`, `MODEL_NAME`, `HF_TOKEN`).
 
 ## Docker
 ```bash
@@ -77,7 +77,7 @@ docker run -p 7860:7860 supportopsenv
 ```
 
 ## Hugging Face Spaces
-- Use Docker SDK, set env vars `API_BASE_URL`, `MODEL_NAME`, `HF_TOKEN`, `OPENAI_API_KEY`.
+- Use Docker SDK, set env vars `API_BASE_URL`, `API_KEY`, `MODEL_NAME`, `HF_TOKEN`.
 - See `hf_spaces_guide.md` for deployment steps and endpoint testing.
 
 ## OpenEnv metadata

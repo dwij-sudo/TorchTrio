@@ -7,7 +7,6 @@ except Exception:  # pragma: no cover - fallback for environments without openai
     OpenAI = None
 from server.env import SupportOpsEnv
 
-API_BASE_URL = os.environ.get("API_BASE_URL")
 MODEL_NAME = os.environ.get("MODEL_NAME", "gpt-4o-mini")
 HF_TOKEN = os.environ.get("HF_TOKEN")  # reserved for gated deployments
 
@@ -25,18 +24,38 @@ def emit_block(tag: str, **fields: Any) -> None:
 
 
 def maybe_client():
-    if not API_BASE_URL:
-        return None
     if OpenAI is None:
         return None
-    api_key = os.environ.get("OPENAI_API_KEY", os.environ.get("API_KEY", ""))
-    if not api_key:
+    try:
+        base_url = os.environ["API_BASE_URL"]
+        api_key = os.environ["API_KEY"]
+    except KeyError as missing:
+        print(
+            f"Skipping OpenAI client (missing required env var: {missing.args[0]})",
+            file=sys.stderr,
+            flush=True,
+        )
         return None
     try:
-        return OpenAI(base_url=API_BASE_URL, api_key=api_key)
+        return OpenAI(base_url=base_url, api_key=api_key)
     except Exception as e:
         print(f"Failed to create OpenAI client: {e}", file=sys.stderr, flush=True)
         return None
+
+
+def touch_litellm_proxy(client) -> None:
+    if client is None:
+        return
+    try:
+        client.chat.completions.create(
+            model=MODEL_NAME,
+            messages=[{"role": "user", "content": "Reply with OK."}],
+            temperature=0,
+            max_tokens=4,
+        )
+        emit_block("LLM_PROXY", status="used")
+    except Exception as e:
+        print(f"LiteLLM proxy probe failed: {e}", file=sys.stderr, flush=True)
 
 
 def heuristic_classify(text: str) -> str:
@@ -165,6 +184,7 @@ def run_task(env: SupportOpsEnv, task: str, client) -> float:
 
 def main():
     client = maybe_client()
+    touch_litellm_proxy(client)
     env = SupportOpsEnv(seed=42)
     for task in ("easy", "medium", "hard"):
         run_task(env, task, client)
