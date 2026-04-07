@@ -1,7 +1,10 @@
 import os
 import json
 from typing import Dict, Any
-from openai import OpenAI
+try:
+    from openai import OpenAI
+except Exception:  # pragma: no cover - fallback for environments without openai installed
+    OpenAI = None
 from server.env import SupportOpsEnv
 
 API_BASE_URL = os.environ.get("API_BASE_URL")
@@ -12,10 +15,16 @@ HF_TOKEN = os.environ.get("HF_TOKEN")  # reserved for gated deployments
 def maybe_client():
     if not API_BASE_URL:
         return None
+    if OpenAI is None:
+        return None
     api_key = os.environ.get("OPENAI_API_KEY", os.environ.get("API_KEY", ""))
     if not api_key:
         return None
-    return OpenAI(base_url=API_BASE_URL, api_key=api_key)
+    try:
+        return OpenAI(base_url=API_BASE_URL, api_key=api_key)
+    except Exception as e:
+        print(f"Failed to create OpenAI client: {e}")
+        return None
 
 
 def heuristic_classify(text: str) -> str:
@@ -27,22 +36,28 @@ def heuristic_classify(text: str) -> str:
     return "general"
 
 
-def llm_response(client: OpenAI, ticket_text: str, sentiment: str, task: str) -> str:
+def llm_response(client, ticket_text: str, sentiment: str, task: str) -> str:
+    prefix = "Sorry" if sentiment in ("angry", "negative") else "Thanks"
+    fallback = f"{prefix} for reaching out. We are investigating: {ticket_text[:120]} and will update you shortly."
     if client is None:
-        prefix = "Sorry" if sentiment in ("angry", "negative") else "Thanks"
-        return f"{prefix} for reaching out. We are investigating: {ticket_text[:120]} and will update you shortly."
+        return fallback
     prompt = (
         "You are a concise, empathetic SaaS support agent. "
         f"Task: {task}. Sentiment: {sentiment}. Ticket: {ticket_text}. "
         "Respond briefly with apology if negative and include next steps."
     )
-    resp = client.chat.completions.create(
-        model=MODEL_NAME,
-        messages=[{"role": "user", "content": prompt}],
-        temperature=0.2,
-        max_tokens=120,
-    )
-    return resp.choices[0].message.content
+    try:
+        resp = client.chat.completions.create(
+            model=MODEL_NAME,
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.2,
+            max_tokens=120,
+        )
+        content = resp.choices[0].message.content
+        return content if content else fallback
+    except Exception as e:
+        print(f"LLM request failed: {e}")
+        return fallback
 
 
 def run_task(env: SupportOpsEnv, task: str, client) -> float:
