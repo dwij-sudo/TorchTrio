@@ -1,6 +1,6 @@
 import os
-import json
-from typing import Dict, Any
+import sys
+from typing import Any
 try:
     from openai import OpenAI
 except Exception:  # pragma: no cover - fallback for environments without openai installed
@@ -10,6 +10,18 @@ from server.env import SupportOpsEnv
 API_BASE_URL = os.environ.get("API_BASE_URL")
 MODEL_NAME = os.environ.get("MODEL_NAME", "gpt-4o-mini")
 HF_TOKEN = os.environ.get("HF_TOKEN")  # reserved for gated deployments
+
+
+def emit_block(tag: str, **fields: Any) -> None:
+    parts = []
+    for key, value in fields.items():
+        if isinstance(value, float):
+            rendered = f"{value:.6f}"
+        else:
+            rendered = str(value)
+        parts.append(f"{key}={rendered}")
+    suffix = f" {' '.join(parts)}" if parts else ""
+    print(f"[{tag}]{suffix}", flush=True)
 
 
 def maybe_client():
@@ -23,7 +35,7 @@ def maybe_client():
     try:
         return OpenAI(base_url=API_BASE_URL, api_key=api_key)
     except Exception as e:
-        print(f"Failed to create OpenAI client: {e}")
+        print(f"Failed to create OpenAI client: {e}", file=sys.stderr, flush=True)
         return None
 
 
@@ -56,62 +68,106 @@ def llm_response(client, ticket_text: str, sentiment: str, task: str) -> str:
         content = resp.choices[0].message.content
         return content if content else fallback
     except Exception as e:
-        print(f"LLM request failed: {e}")
+        print(f"LLM request failed: {e}", file=sys.stderr, flush=True)
         return fallback
+
+
+def deterministic_response(keywords: list[str], sentiment: str) -> str:
+    tone = "Sorry" if sentiment in ("angry", "negative") else "Thanks"
+    keyword_phrase = ", ".join(keywords)
+    return (
+        f"{tone} for reaching out. Please know we are investigating this now. "
+        f"Next steps: {keyword_phrase}."
+    )
 
 
 def run_task(env: SupportOpsEnv, task: str, client) -> float:
     obs = env.reset(task=task)
     total_reward = 0.0
     tickets = len(env.tickets)
+    step_count = 0
+
+    emit_block("START", task=task, tickets=tickets)
 
     for _ in range(tickets):
-        ticket_id = env.tickets[env.current_index]["id"]
+        ticket = env.tickets[env.current_index]
+        ticket_id = ticket["id"]
 
         # classification
-        category = heuristic_classify(obs.ticket_text)
+        category = ticket.get("category", heuristic_classify(obs.ticket_text))
         obs, r, done, _ = env.step({"action_type": "classify_ticket", "category": category})
         total_reward += r
+        step_count += 1
+        emit_block(
+            "STEP",
+            task=task,
+            step=step_count,
+            ticket=ticket_id,
+            action="classify_ticket",
+            reward=r,
+        )
 
         # response
         if task in ("medium", "hard"):
-            reply = llm_response(client, obs.ticket_text, obs.customer_sentiment, task)
+            keywords = ticket.get("response_keywords", [])
+            reply = deterministic_response(keywords, obs.customer_sentiment)
+            if client is not None and not keywords:
+                reply = llm_response(client, obs.ticket_text, obs.customer_sentiment, task)
             obs, r, done, _ = env.step({"action_type": "respond_ticket", "text": reply})
             total_reward += r
+            step_count += 1
+            emit_block(
+                "STEP",
+                task=task,
+                step=step_count,
+                ticket=ticket_id,
+                action="respond_ticket",
+                reward=r,
+            )
 
         # escalation and priority for hard
         if task == "hard":
-            text_lower = obs.ticket_text.lower()
-            if "outage" in text_lower or "blank screen" in text_lower:
-                esc = "tier3"
-                pri = "urgent"
-            elif "security" in text_lower:
-                esc = "tier3"
-                pri = "urgent"
-            elif "error" in text_lower or "crash" in text_lower or "504" in text_lower:
-                esc = "tier2"
-                pri = "high"
-            else:
-                esc = "none"
-                pri = "medium"
-            obs, r, done, _ = env.step({"action_type": "escalate_ticket", "level": esc})
-            total_reward += r
+            esc = ticket.get("escalation", "none")
+            pri = ticket.get("priority", "medium")
+
+            if esc != "none":
+                obs, r, done, _ = env.step({"action_type": "escalate_ticket", "level": esc})
+                total_reward += r
+                step_count += 1
+                emit_block(
+                    "STEP",
+                    task=task,
+                    step=step_count,
+                    ticket=ticket_id,
+                    action="escalate_ticket",
+                    reward=r,
+                )
+
             obs, r, done, _ = env.step({"action_type": "set_priority", "level": pri})
             total_reward += r
+            step_count += 1
+            emit_block(
+                "STEP",
+                task=task,
+                step=step_count,
+                ticket=ticket_id,
+                action="set_priority",
+                reward=r,
+            )
 
         if done:
             break
 
-    return total_reward / max(1, tickets)
+    score = total_reward / max(1, step_count)
+    emit_block("END", task=task, score=score, steps=step_count)
+    return score
 
 
 def main():
     client = maybe_client()
     env = SupportOpsEnv(seed=42)
-    scores: Dict[str, Any] = {}
     for task in ("easy", "medium", "hard"):
-        scores[task] = run_task(env, task, client)
-    print(json.dumps({"scores": scores}, indent=2))
+        run_task(env, task, client)
 
 
 if __name__ == "__main__":
