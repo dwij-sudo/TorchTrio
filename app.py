@@ -30,8 +30,9 @@ def root():
 
 
 @app.post("/reset")
-def reset(req: ResetRequest):
-    obs = env.reset(task=req.task or "easy")
+def reset(req: Optional[ResetRequest] = None):
+    task = req.task if req and req.task else "easy"
+    obs = env.reset(task=task)
     return {"observation": obs.model_dump()}
 
 
@@ -49,3 +50,12 @@ def step(req: StepRequest):
 @app.get("/state")
 def state():
     return env.state()
+
+
+def main():
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000)
+
+
+if __name__ == "__main__":
+    main()
