@@ -66,8 +66,9 @@ obs, reward, done, info = env.step({"action_type": "classify_ticket", "category"
 ```bash
 python inference.py
 ```
-Outputs JSON scores for easy/medium/hard using heuristic classification and optional OpenAI responses (`API_BASE_URL`, `API_KEY`, `MODEL_NAME`, `HF_TOKEN`).
-Defaults: `API_BASE_URL=https://api.openai.com/v1`, `MODEL_NAME=gpt-4.1-mini`. Set `HF_TOKEN` manually as a secret/environment variable.
+Outputs JSON scores for easy/medium/hard using OpenAI responses (`API_BASE_URL`, `MODEL_NAME`, `HF_TOKEN`).
+Defaults: `API_BASE_URL=https://api.openai.com/v1`, `MODEL_NAME=gpt-4.1-mini`.
+`HF_TOKEN` is required and used as the OpenAI `api_key`.
 
 ## Docker
 ```bash
@@ -76,7 +77,7 @@ docker run -p 7860:7860 supportopsenv
 ```
 
 ## Hugging Face Spaces
-- Use Docker SDK, set env vars `API_BASE_URL`, `API_KEY`, `MODEL_NAME`, `HF_TOKEN`.
+- Use Docker SDK, set env vars `API_BASE_URL`, `MODEL_NAME`, and set `HF_TOKEN` in Space secrets.
 - See `hf_spaces_guide.md` for deployment steps and endpoint testing.
 
 ## OpenEnv metadata

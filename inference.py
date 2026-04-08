@@ -8,20 +8,27 @@ except Exception:  # pragma: no cover - fallback for environments without openai
 from server.env import SupportOpsEnv
 
 MODEL_NAME = os.environ.get("MODEL_NAME", "gpt-4.1-mini")
-HF_TOKEN = os.environ.get("HF_TOKEN")  # reserved for gated deployments
+HF_TOKEN = os.environ.get("HF_TOKEN")
 API_BASE_URL = os.environ.get("API_BASE_URL", "https://api.openai.com/v1")
 
 
 def emit_block(tag: str, **fields: Any) -> None:
     parts = []
     for key, value in fields.items():
-        if isinstance(value, float):
-            rendered = f"{value:.6f}"
+        if isinstance(value, bool):
+            rendered = "true" if value else "false"
+        elif isinstance(value, float):
+            rendered = f"{value:.2f}"
         else:
             rendered = str(value)
         parts.append(f"{key}={rendered}")
     suffix = f" {' '.join(parts)}" if parts else ""
     print(f"[{tag}]{suffix}", flush=True)
+
+
+def _compact_error(exc: Exception) -> str:
+    raw = str(exc).strip() or exc.__class__.__name__
+    return raw.replace("\r", " ").replace("\n", " ").replace(" ", "_")[:160]
 
 
 def heuristic_classify(ticket_text: str) -> str:
@@ -44,50 +51,18 @@ def heuristic_classify(ticket_text: str) -> str:
 
 def maybe_client():
     if OpenAI is None:
-        return None
+        raise RuntimeError("openai package is not installed")
+    if HF_TOKEN is None:
+        raise ValueError("HF_TOKEN environment variable is required")
+
     try:
-        api_key = os.environ["API_KEY"]
-    except KeyError as missing:
-        print(
-            f"Skipping OpenAI client (missing required env var: {missing.args[0]})",
-            file=sys.stderr,
-            flush=True,
-        )
-        return None
-    try:
-        # Create client with only the required parameters to avoid proxy conflicts
-        # Remove any environment variables that might interfere with client initialization
-        client = OpenAI(base_url=API_BASE_URL, api_key=api_key)
+        client = OpenAI(base_url=API_BASE_URL, api_key=HF_TOKEN)
         return client
-    except TypeError as e:
-        # Handle cases where unexpected kwargs are being passed (e.g., proxies)
-        if "proxies" in str(e) or "unexpected keyword" in str(e):
-            print(f"Failed to create OpenAI client (proxies argument issue): {e}", file=sys.stderr, flush=True)
-            return None
-        raise
     except Exception as e:
-        print(f"Failed to create OpenAI client: {e}", file=sys.stderr, flush=True)
-        return None
-
-
-def touch_litellm_proxy(client) -> None:
-    if client is None:
-        return
-    try:
-        client.chat.completions.create(
-            model=MODEL_NAME,
-            messages=[{"role": "user", "content": "Reply with OK."}],
-            temperature=0,
-            max_tokens=4,
-        )
-        emit_block("LLM_PROXY", status="used")
-    except Exception as e:
-        print(f"LiteLLM proxy probe failed: {e}", file=sys.stderr, flush=True)
+        raise RuntimeError(f"Failed to create OpenAI client: {e}") from e
 
 
 def llm_classify(client, ticket_text: str, sentiment: str) -> str:
-    if client is None:
-        return heuristic_classify(ticket_text)
     prompt = (
         "Classify this customer support ticket into one of: billing, technical, general. "
         f"Ticket: {ticket_text}. Sentiment: {sentiment}. "
@@ -111,8 +86,6 @@ def llm_classify(client, ticket_text: str, sentiment: str) -> str:
 
 
 def llm_escalate(client, ticket_text: str, sentiment: str, task: str) -> str:
-    if client is None:
-        return "none"
     prompt = (
         "Should this customer support ticket be escalated? Levels: none, tier1, tier2, tier3. "
         f"Ticket: {ticket_text}. Sentiment: {sentiment}. Task: {task}. "
@@ -136,8 +109,6 @@ def llm_escalate(client, ticket_text: str, sentiment: str, task: str) -> str:
 
 
 def llm_priority(client, ticket_text: str, sentiment: str, task: str) -> str:
-    if client is None:
-        return "medium"
     prompt = (
         "Set priority for this customer support ticket: low, medium, high, urgent. "
         f"Ticket: {ticket_text}. Sentiment: {sentiment}. Task: {task}. "
@@ -163,8 +134,6 @@ def llm_priority(client, ticket_text: str, sentiment: str, task: str) -> str:
 def llm_response(client, ticket_text: str, sentiment: str, task: str) -> str:
     prefix = "Sorry" if sentiment in ("angry", "negative") else "Thanks"
     fallback = f"{prefix} for reaching out. We are investigating: {ticket_text[:120]} and will update you shortly."
-    if client is None:
-        return fallback
     prompt = (
         "You are a concise, empathetic SaaS support agent. "
         f"Task: {task}. Sentiment: {sentiment}. Ticket: {ticket_text}. "
@@ -194,35 +163,24 @@ def deterministic_response(keywords: list[str], sentiment: str) -> str:
 
 
 def run_task(env: SupportOpsEnv, task: str, client) -> float:
-    obs = env.reset(task=task)
     total_reward = 0.0
-    tickets = len(env.tickets)
     step_count = 0
+    tickets = 0
+    started = False
 
-    emit_block("START", task=task, tickets=tickets)
+    try:
+        obs = env.reset(task=task)
+        tickets = len(env.tickets)
+        emit_block("START", task=task, tickets=tickets)
+        started = True
 
-    for _ in range(tickets):
-        ticket = env.tickets[env.current_index]
-        ticket_id = ticket["id"]
+        for _ in range(tickets):
+            ticket = env.tickets[env.current_index]
+            ticket_id = ticket["id"]
 
-        # classification
-        category = llm_classify(client, obs.ticket_text, obs.customer_sentiment)
-        obs, r, done, _ = env.step({"action_type": "classify_ticket", "category": category})
-        total_reward += r
-        step_count += 1
-        emit_block(
-            "STEP",
-            task=task,
-            step=step_count,
-            ticket=ticket_id,
-            action="classify_ticket",
-            reward=r,
-        )
-
-        # response
-        if task in ("medium", "hard"):
-            reply = llm_response(client, obs.ticket_text, obs.customer_sentiment, task)
-            obs, r, done, _ = env.step({"action_type": "respond_ticket", "text": reply})
+            # classification
+            category = llm_classify(client, obs.ticket_text, obs.customer_sentiment)
+            obs, r, done, _ = env.step({"action_type": "classify_ticket", "category": category})
             total_reward += r
             step_count += 1
             emit_block(
@@ -230,16 +188,14 @@ def run_task(env: SupportOpsEnv, task: str, client) -> float:
                 task=task,
                 step=step_count,
                 ticket=ticket_id,
-                action="respond_ticket",
+                action="classify_ticket",
                 reward=r,
             )
 
-        # escalation and priority for hard
-        if task == "hard":
-            esc = llm_escalate(client, obs.ticket_text, obs.customer_sentiment, task)
-
-            if esc != "none":
-                obs, r, done, _ = env.step({"action_type": "escalate_ticket", "level": esc})
+            # response
+            if task in ("medium", "hard"):
+                reply = llm_response(client, obs.ticket_text, obs.customer_sentiment, task)
+                obs, r, done, _ = env.step({"action_type": "respond_ticket", "text": reply})
                 total_reward += r
                 step_count += 1
                 emit_block(
@@ -247,42 +203,75 @@ def run_task(env: SupportOpsEnv, task: str, client) -> float:
                     task=task,
                     step=step_count,
                     ticket=ticket_id,
-                    action="escalate_ticket",
+                    action="respond_ticket",
                     reward=r,
                 )
 
-            pri = llm_priority(client, obs.ticket_text, obs.customer_sentiment, task)
-            obs, r, done, _ = env.step({"action_type": "set_priority", "level": pri})
-            total_reward += r
-            step_count += 1
-            emit_block(
-                "STEP",
-                task=task,
-                step=step_count,
-                ticket=ticket_id,
-                action="set_priority",
-                reward=r,
-            )
+            # escalation and priority for hard
+            if task == "hard":
+                esc = llm_escalate(client, obs.ticket_text, obs.customer_sentiment, task)
 
-        if done:
-            break
+                if esc != "none":
+                    obs, r, done, _ = env.step({"action_type": "escalate_ticket", "level": esc})
+                    total_reward += r
+                    step_count += 1
+                    emit_block(
+                        "STEP",
+                        task=task,
+                        step=step_count,
+                        ticket=ticket_id,
+                        action="escalate_ticket",
+                        reward=r,
+                    )
+
+                pri = llm_priority(client, obs.ticket_text, obs.customer_sentiment, task)
+                obs, r, done, _ = env.step({"action_type": "set_priority", "level": pri})
+                total_reward += r
+                step_count += 1
+                emit_block(
+                    "STEP",
+                    task=task,
+                    step=step_count,
+                    ticket=ticket_id,
+                    action="set_priority",
+                    reward=r,
+                )
+
+            if done:
+                break
+    except Exception as exc:
+        print(f"Task {task} failed: {exc}", file=sys.stderr, flush=True)
+        if not started:
+            emit_block("START", task=task, tickets=tickets)
+        emit_block(
+            "END",
+            task=task,
+            score=total_reward / max(1, step_count),
+            steps=step_count,
+            failed=True,
+            error=_compact_error(exc),
+        )
+        return total_reward / max(1, step_count)
 
     score = total_reward / max(1, step_count)
-    emit_block("END", task=task, score=score, steps=step_count)
+    emit_block("END", task=task, score=score, steps=step_count, failed=False)
     return score
 
 
 def main():
-    if not HF_TOKEN:
-        print(
-            "HF_TOKEN is not set. Configure it manually in your environment/Space secrets if required.",
-            file=sys.stderr,
-            flush=True,
-        )
-    client = maybe_client()
-    touch_litellm_proxy(client)
+    tasks = ("easy", "medium", "hard")
+
+    try:
+        client = maybe_client()
+    except Exception as exc:
+        print(f"Client initialization failed: {exc}", file=sys.stderr, flush=True)
+        for task in tasks:
+            emit_block("START", task=task, tickets=0)
+            emit_block("END", task=task, score=0.0, steps=0, failed=True, error=_compact_error(exc))
+        raise
+
     env = SupportOpsEnv(seed=42)
-    for task in ("easy", "medium", "hard"):
+    for task in tasks:
         run_task(env, task, client)
 
 

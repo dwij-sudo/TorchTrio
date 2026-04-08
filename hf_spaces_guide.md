@@ -8,17 +8,21 @@
 2) Upload project files
 - Push this repository contents (including `Dockerfile`, `requirements.txt`, `app.py`, `openenv.yaml`, `data/`, `server/`).
 
-3) Set environment variables (Settings → Variables) — copy/paste
+3) Set environment variables (Settings → Variables)
 ```
-API_KEY=sk-REPLACE_ME
-HF_TOKEN=hf_xxx
+API_BASE_URL=https://api.openai.com/v1
+MODEL_NAME=gpt-4.1-mini
 PORT=7860
+```
+Set this in Settings → Secrets:
+```
+HF_TOKEN=hf_xxx
 ```
 Notes:
 - `API_BASE_URL` defaults to `https://api.openai.com/v1` if unset.
 - `MODEL_NAME` defaults to `gpt-4.1-mini` if unset.
-- For LiteLLM/OpenAI-compatible proxies, use `API_BASE_URL` and `API_KEY`.
-- Set `HF_TOKEN` manually as a Space secret/environment variable (do not hardcode it in code).
+- `HF_TOKEN` is required and is used as `api_key` for the OpenAI client.
+- Do not hardcode credentials in code.
 
 4) Build & run
 - The Space auto-builds using the Dockerfile and starts uvicorn on port 7860:
