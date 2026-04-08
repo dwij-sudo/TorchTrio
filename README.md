@@ -67,6 +67,7 @@ obs, reward, done, info = env.step({"action_type": "classify_ticket", "category"
 python inference.py
 ```
 Outputs JSON scores for easy/medium/hard using heuristic classification and optional OpenAI responses (`API_BASE_URL`, `API_KEY`, `MODEL_NAME`, `HF_TOKEN`).
+Defaults: `API_BASE_URL=https://api.openai.com/v1`, `MODEL_NAME=gpt-4.1-mini`. Set `HF_TOKEN` manually as a secret/environment variable.
 
 ## Docker
 ```bash

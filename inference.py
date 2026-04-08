@@ -9,6 +9,7 @@ from server.env import SupportOpsEnv
 
 MODEL_NAME = os.environ.get("MODEL_NAME", "gpt-4.1-mini")
 HF_TOKEN = os.environ.get("HF_TOKEN")  # reserved for gated deployments
+API_BASE_URL = os.environ.get("API_BASE_URL", "https://api.openai.com/v1")
 
 
 def emit_block(tag: str, **fields: Any) -> None:
@@ -45,7 +46,6 @@ def maybe_client():
     if OpenAI is None:
         return None
     try:
-        base_url = os.environ["API_BASE_URL"]
         api_key = os.environ["API_KEY"]
     except KeyError as missing:
         print(
@@ -57,7 +57,7 @@ def maybe_client():
     try:
         # Create client with only the required parameters to avoid proxy conflicts
         # Remove any environment variables that might interfere with client initialization
-        client = OpenAI(base_url=base_url, api_key=api_key)
+        client = OpenAI(base_url=API_BASE_URL, api_key=api_key)
         return client
     except TypeError as e:
         # Handle cases where unexpected kwargs are being passed (e.g., proxies)
@@ -273,6 +273,12 @@ def run_task(env: SupportOpsEnv, task: str, client) -> float:
 
 
 def main():
+    if not HF_TOKEN:
+        print(
+            "HF_TOKEN is not set. Configure it manually in your environment/Space secrets if required.",
+            file=sys.stderr,
+            flush=True,
+        )
     client = maybe_client()
     touch_litellm_proxy(client)
     env = SupportOpsEnv(seed=42)
