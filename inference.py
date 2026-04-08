@@ -7,7 +7,7 @@ except Exception:  # pragma: no cover - fallback for environments without openai
     OpenAI = None
 from server.env import SupportOpsEnv
 
-MODEL_NAME = os.environ.get("MODEL_NAME", "gpt-4o-mini")
+MODEL_NAME = os.environ.get("MODEL_NAME", "gpt-4.1-mini")
 HF_TOKEN = os.environ.get("HF_TOKEN")  # reserved for gated deployments
 
 
@@ -58,13 +58,79 @@ def touch_litellm_proxy(client) -> None:
         print(f"LiteLLM proxy probe failed: {e}", file=sys.stderr, flush=True)
 
 
-def heuristic_classify(text: str) -> str:
-    lower = text.lower()
-    if any(word in lower for word in ["payment", "billing", "refund", "invoice", "charge"]):
-        return "billing"
-    if any(word in lower for word in ["crash", "error", "outage", "bug", "security", "login", "504", "blank screen"]):
-        return "technical"
-    return "general"
+def llm_classify(client, ticket_text: str, sentiment: str) -> str:
+    if client is None:
+        return heuristic_classify(ticket_text)
+    prompt = (
+        "Classify this customer support ticket into one of: billing, technical, general. "
+        f"Ticket: {ticket_text}. Sentiment: {sentiment}. "
+        "Respond with only the category name."
+    )
+    try:
+        resp = client.chat.completions.create(
+            model=MODEL_NAME,
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0,
+            max_tokens=10,
+        )
+        content = resp.choices[0].message.content.strip().lower()
+        if content in ["billing", "technical", "general"]:
+            return content
+        else:
+            return heuristic_classify(ticket_text)
+    except Exception as e:
+        print(f"LLM classification failed: {e}", file=sys.stderr, flush=True)
+        return heuristic_classify(ticket_text)
+
+
+def llm_escalate(client, ticket_text: str, sentiment: str, task: str) -> str:
+    if client is None:
+        return "none"
+    prompt = (
+        "Should this customer support ticket be escalated? Levels: none, tier1, tier2, tier3. "
+        f"Ticket: {ticket_text}. Sentiment: {sentiment}. Task: {task}. "
+        "Respond with only the level name."
+    )
+    try:
+        resp = client.chat.completions.create(
+            model=MODEL_NAME,
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0,
+            max_tokens=10,
+        )
+        content = resp.choices[0].message.content.strip().lower()
+        if content in ["none", "tier1", "tier2", "tier3"]:
+            return content
+        else:
+            return "none"
+    except Exception as e:
+        print(f"LLM escalation failed: {e}", file=sys.stderr, flush=True)
+        return "none"
+
+
+def llm_priority(client, ticket_text: str, sentiment: str, task: str) -> str:
+    if client is None:
+        return "medium"
+    prompt = (
+        "Set priority for this customer support ticket: low, medium, high, urgent. "
+        f"Ticket: {ticket_text}. Sentiment: {sentiment}. Task: {task}. "
+        "Respond with only the priority level."
+    )
+    try:
+        resp = client.chat.completions.create(
+            model=MODEL_NAME,
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0,
+            max_tokens=10,
+        )
+        content = resp.choices[0].message.content.strip().lower()
+        if content in ["low", "medium", "high", "urgent"]:
+            return content
+        else:
+            return "medium"
+    except Exception as e:
+        print(f"LLM priority failed: {e}", file=sys.stderr, flush=True)
+        return "medium"
 
 
 def llm_response(client, ticket_text: str, sentiment: str, task: str) -> str:
@@ -113,7 +179,7 @@ def run_task(env: SupportOpsEnv, task: str, client) -> float:
         ticket_id = ticket["id"]
 
         # classification
-        category = ticket.get("category", heuristic_classify(obs.ticket_text))
+        category = llm_classify(client, obs.ticket_text, obs.customer_sentiment)
         obs, r, done, _ = env.step({"action_type": "classify_ticket", "category": category})
         total_reward += r
         step_count += 1
@@ -128,10 +194,7 @@ def run_task(env: SupportOpsEnv, task: str, client) -> float:
 
         # response
         if task in ("medium", "hard"):
-            keywords = ticket.get("response_keywords", [])
-            reply = deterministic_response(keywords, obs.customer_sentiment)
-            if client is not None and not keywords:
-                reply = llm_response(client, obs.ticket_text, obs.customer_sentiment, task)
+            reply = llm_response(client, obs.ticket_text, obs.customer_sentiment, task)
             obs, r, done, _ = env.step({"action_type": "respond_ticket", "text": reply})
             total_reward += r
             step_count += 1
@@ -146,8 +209,7 @@ def run_task(env: SupportOpsEnv, task: str, client) -> float:
 
         # escalation and priority for hard
         if task == "hard":
-            esc = ticket.get("escalation", "none")
-            pri = ticket.get("priority", "medium")
+            esc = llm_escalate(client, obs.ticket_text, obs.customer_sentiment, task)
 
             if esc != "none":
                 obs, r, done, _ = env.step({"action_type": "escalate_ticket", "level": esc})
@@ -162,6 +224,7 @@ def run_task(env: SupportOpsEnv, task: str, client) -> float:
                     reward=r,
                 )
 
+            pri = llm_priority(client, obs.ticket_text, obs.customer_sentiment, task)
             obs, r, done, _ = env.step({"action_type": "set_priority", "level": pri})
             total_reward += r
             step_count += 1
