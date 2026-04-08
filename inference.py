@@ -23,6 +23,24 @@ def emit_block(tag: str, **fields: Any) -> None:
     print(f"[{tag}]{suffix}", flush=True)
 
 
+def heuristic_classify(ticket_text: str) -> str:
+    """Fallback classification when LLM is unavailable."""
+    text_lower = ticket_text.lower()
+    
+    # Check for billing-related keywords
+    billing_keywords = ["bill", "charge", "payment", "invoice", "refund", "credit card", "subscription", "price"]
+    if any(keyword in text_lower for keyword in billing_keywords):
+        return "billing"
+    
+    # Check for technical-related keywords
+    technical_keywords = ["error", "bug", "crash", "fix", "technical", "api", "code", "exception", "broken", "not working"]
+    if any(keyword in text_lower for keyword in technical_keywords):
+        return "technical"
+    
+    # Default to general
+    return "general"
+
+
 def maybe_client():
     if OpenAI is None:
         return None
@@ -37,7 +55,16 @@ def maybe_client():
         )
         return None
     try:
-        return OpenAI(base_url=base_url, api_key=api_key)
+        # Create client with only the required parameters to avoid proxy conflicts
+        # Remove any environment variables that might interfere with client initialization
+        client = OpenAI(base_url=base_url, api_key=api_key)
+        return client
+    except TypeError as e:
+        # Handle cases where unexpected kwargs are being passed (e.g., proxies)
+        if "proxies" in str(e) or "unexpected keyword" in str(e):
+            print(f"Failed to create OpenAI client (proxies argument issue): {e}", file=sys.stderr, flush=True)
+            return None
+        raise
     except Exception as e:
         print(f"Failed to create OpenAI client: {e}", file=sys.stderr, flush=True)
         return None
