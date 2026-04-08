@@ -10,6 +10,7 @@ from server.env import SupportOpsEnv
 MODEL_NAME = os.environ.get("MODEL_NAME", "gpt-4.1-mini")
 HF_TOKEN = os.environ.get("HF_TOKEN")
 API_BASE_URL = os.environ.get("API_BASE_URL", "https://api.openai.com/v1")
+SCORE_EPSILON = 0.01
 
 
 def emit_block(tag: str, **fields: Any) -> None:
@@ -29,6 +30,12 @@ def emit_block(tag: str, **fields: Any) -> None:
 def _compact_error(exc: Exception) -> str:
     raw = str(exc).strip() or exc.__class__.__name__
     return raw.replace("\r", " ").replace("\n", " ").replace(" ", "_")[:160]
+
+
+def _to_open_score(raw_reward_score: float) -> float:
+    # Convert reward range [-1, 1] to score range [0, 1], then keep it strictly inside bounds.
+    normalized = (raw_reward_score + 1.0) / 2.0
+    return min(1.0 - SCORE_EPSILON, max(SCORE_EPSILON, normalized))
 
 
 def heuristic_classify(ticket_text: str) -> str:
@@ -243,17 +250,18 @@ def run_task(env: SupportOpsEnv, task: str, client) -> float:
         print(f"Task {task} failed: {exc}", file=sys.stderr, flush=True)
         if not started:
             emit_block("START", task=task, tickets=tickets)
+        score = _to_open_score(total_reward / max(1, step_count))
         emit_block(
             "END",
             task=task,
-            score=total_reward / max(1, step_count),
+            score=score,
             steps=step_count,
             failed=True,
             error=_compact_error(exc),
         )
-        return total_reward / max(1, step_count)
+        return score
 
-    score = total_reward / max(1, step_count)
+    score = _to_open_score(total_reward / max(1, step_count))
     emit_block("END", task=task, score=score, steps=step_count, failed=False)
     return score
 
@@ -267,7 +275,14 @@ def main():
         print(f"Client initialization failed: {exc}", file=sys.stderr, flush=True)
         for task in tasks:
             emit_block("START", task=task, tickets=0)
-            emit_block("END", task=task, score=0.0, steps=0, failed=True, error=_compact_error(exc))
+            emit_block(
+                "END",
+                task=task,
+                score=SCORE_EPSILON,
+                steps=0,
+                failed=True,
+                error=_compact_error(exc),
+            )
         raise
 
     env = SupportOpsEnv(seed=42)
