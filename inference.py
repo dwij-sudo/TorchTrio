@@ -1,10 +1,18 @@
+"""SupportOpsEnv baseline inference runner.
+
+Compatible with OpenAI-compatible APIs, including Llama-family models served
+from Hugging Face endpoints (TGI/vLLM) when exposed with an OpenAI interface.
+"""
+
 import os
 import sys
 from typing import Any
+
 try:
     from openai import OpenAI
 except Exception:  # pragma: no cover - fallback for environments without openai installed
     OpenAI = None
+
 from server.env import SupportOpsEnv
 
 MODEL_NAME = os.environ.get("MODEL_NAME", "gpt-4.1-mini")
@@ -38,21 +46,50 @@ def _to_open_score(raw_reward_score: float) -> float:
     return min(1.0 - SCORE_EPSILON, max(SCORE_EPSILON, normalized))
 
 
+def _extract_message_text(resp: Any) -> str:
+    try:
+        content = resp.choices[0].message.content
+    except Exception:
+        return ""
+
+    if isinstance(content, str):
+        return content.strip()
+
+    # Some OpenAI-compatible backends return content parts.
+    if isinstance(content, list):
+        chunks: list[str] = []
+        for item in content:
+            if isinstance(item, str):
+                chunks.append(item)
+            elif isinstance(item, dict):
+                text = item.get("text")
+                if isinstance(text, str):
+                    chunks.append(text)
+        return " ".join(chunk.strip() for chunk in chunks if chunk).strip()
+
+    return str(content).strip()
+
+
+def _normalize_label(label: str) -> str:
+    normalized = label.strip().lower()
+    if not normalized:
+        return ""
+    token = normalized.split()[0]
+    return token.strip(".,:;!?")
+
+
 def heuristic_classify(ticket_text: str) -> str:
-    """Fallback classification when LLM is unavailable."""
+    """Fallback classification when LLM output is unavailable or invalid."""
     text_lower = ticket_text.lower()
-    
-    # Check for billing-related keywords
+
     billing_keywords = ["bill", "charge", "payment", "invoice", "refund", "credit card", "subscription", "price"]
     if any(keyword in text_lower for keyword in billing_keywords):
         return "billing"
-    
-    # Check for technical-related keywords
+
     technical_keywords = ["error", "bug", "crash", "fix", "technical", "api", "code", "exception", "broken", "not working"]
     if any(keyword in text_lower for keyword in technical_keywords):
         return "technical"
-    
-    # Default to general
+
     return "general"
 
 
@@ -63,13 +100,15 @@ def maybe_client():
         raise ValueError("HF_TOKEN environment variable is required")
 
     try:
-        client = OpenAI(base_url=API_BASE_URL, api_key=HF_TOKEN)
-        return client
-    except Exception as e:
-        raise RuntimeError(f"Failed to create OpenAI client: {e}") from e
+        return OpenAI(base_url=API_BASE_URL, api_key=HF_TOKEN)
+    except Exception as exc:
+        raise RuntimeError(f"Failed to create OpenAI client: {exc}") from exc
 
 
-def llm_classify(client, ticket_text: str, sentiment: str) -> str:
+def llm_classify(client, ticket_text: str, sentiment: str) -> tuple[str, bool, str]:
+    if client is None:
+        return heuristic_classify(ticket_text), True, "client_unavailable"
+
     prompt = (
         "Classify this customer support ticket into one of: billing, technical, general. "
         f"Ticket: {ticket_text}. Sentiment: {sentiment}. "
@@ -82,17 +121,19 @@ def llm_classify(client, ticket_text: str, sentiment: str) -> str:
             temperature=0,
             max_tokens=10,
         )
-        content = resp.choices[0].message.content.strip().lower()
+        content = _normalize_label(_extract_message_text(resp))
         if content in ["billing", "technical", "general"]:
-            return content
-        else:
-            return heuristic_classify(ticket_text)
-    except Exception as e:
-        print(f"LLM classification failed: {e}", file=sys.stderr, flush=True)
-        return heuristic_classify(ticket_text)
+            return content, False, ""
+        return heuristic_classify(ticket_text), True, "invalid_model_output"
+    except Exception as exc:
+        print(f"LLM classification failed: {exc}", file=sys.stderr, flush=True)
+        return heuristic_classify(ticket_text), True, _compact_error(exc)
 
 
 def llm_escalate(client, ticket_text: str, sentiment: str, task: str) -> str:
+    if client is None:
+        return "none"
+
     prompt = (
         "Should this customer support ticket be escalated? Levels: none, tier1, tier2, tier3. "
         f"Ticket: {ticket_text}. Sentiment: {sentiment}. Task: {task}. "
@@ -105,17 +146,19 @@ def llm_escalate(client, ticket_text: str, sentiment: str, task: str) -> str:
             temperature=0,
             max_tokens=10,
         )
-        content = resp.choices[0].message.content.strip().lower()
+        content = _normalize_label(_extract_message_text(resp))
         if content in ["none", "tier1", "tier2", "tier3"]:
             return content
-        else:
-            return "none"
-    except Exception as e:
-        print(f"LLM escalation failed: {e}", file=sys.stderr, flush=True)
+        return "none"
+    except Exception as exc:
+        print(f"LLM escalation failed: {exc}", file=sys.stderr, flush=True)
         return "none"
 
 
 def llm_priority(client, ticket_text: str, sentiment: str, task: str) -> str:
+    if client is None:
+        return "medium"
+
     prompt = (
         "Set priority for this customer support ticket: low, medium, high, urgent. "
         f"Ticket: {ticket_text}. Sentiment: {sentiment}. Task: {task}. "
@@ -128,19 +171,22 @@ def llm_priority(client, ticket_text: str, sentiment: str, task: str) -> str:
             temperature=0,
             max_tokens=10,
         )
-        content = resp.choices[0].message.content.strip().lower()
+        content = _normalize_label(_extract_message_text(resp))
         if content in ["low", "medium", "high", "urgent"]:
             return content
-        else:
-            return "medium"
-    except Exception as e:
-        print(f"LLM priority failed: {e}", file=sys.stderr, flush=True)
+        return "medium"
+    except Exception as exc:
+        print(f"LLM priority failed: {exc}", file=sys.stderr, flush=True)
         return "medium"
 
 
 def llm_response(client, ticket_text: str, sentiment: str, task: str) -> str:
     prefix = "Sorry" if sentiment in ("angry", "negative") else "Thanks"
     fallback = f"{prefix} for reaching out. We are investigating: {ticket_text[:120]} and will update you shortly."
+
+    if client is None:
+        return fallback
+
     prompt = (
         "You are a concise, empathetic SaaS support agent. "
         f"Task: {task}. Sentiment: {sentiment}. Ticket: {ticket_text}. "
@@ -151,12 +197,15 @@ def llm_response(client, ticket_text: str, sentiment: str, task: str) -> str:
             model=MODEL_NAME,
             messages=[{"role": "user", "content": prompt}],
             temperature=0.2,
-            max_tokens=120,
+            max_tokens=150,
         )
-        content = resp.choices[0].message.content
-        return content if content else fallback
-    except Exception as e:
-        print(f"LLM request failed: {e}", file=sys.stderr, flush=True)
+        content = _extract_message_text(resp)
+        if content:
+            return content
+        print("LLM response was empty; using fallback response", file=sys.stderr, flush=True)
+        return fallback
+    except Exception as exc:
+        print(f"LLM request failed: {exc}", file=sys.stderr, flush=True)
         return fallback
 
 
@@ -181,12 +230,31 @@ def run_task(env: SupportOpsEnv, task: str, client) -> float:
         emit_block("START", task=task, tickets=tickets)
         started = True
 
+        if client is None:
+            emit_block(
+                "STEP",
+                task=task,
+                step=0,
+                ticket="n/a",
+                action="heuristic_fallback",
+                reason="llm_client_unavailable",
+            )
+
         for _ in range(tickets):
             ticket = env.tickets[env.current_index]
             ticket_id = ticket["id"]
 
-            # classification
-            category = llm_classify(client, obs.ticket_text, obs.customer_sentiment)
+            category, used_fallback, fallback_reason = llm_classify(client, obs.ticket_text, obs.customer_sentiment)
+            if used_fallback:
+                emit_block(
+                    "STEP",
+                    task=task,
+                    step=step_count + 1,
+                    ticket=ticket_id,
+                    action="classify_ticket_fallback",
+                    reason=fallback_reason,
+                )
+
             obs, r, done, _ = env.step({"action_type": "classify_ticket", "category": category})
             total_reward += r
             step_count += 1
@@ -199,7 +267,6 @@ def run_task(env: SupportOpsEnv, task: str, client) -> float:
                 reward=r,
             )
 
-            # response
             if task in ("medium", "hard"):
                 reply = llm_response(client, obs.ticket_text, obs.customer_sentiment, task)
                 obs, r, done, _ = env.step({"action_type": "respond_ticket", "text": reply})
@@ -214,7 +281,6 @@ def run_task(env: SupportOpsEnv, task: str, client) -> float:
                     reward=r,
                 )
 
-            # escalation and priority for hard
             if task == "hard":
                 esc = llm_escalate(client, obs.ticket_text, obs.customer_sentiment, task)
 
@@ -268,22 +334,16 @@ def run_task(env: SupportOpsEnv, task: str, client) -> float:
 
 def main():
     tasks = ("easy", "medium", "hard")
+    client = None
 
     try:
         client = maybe_client()
     except Exception as exc:
-        print(f"Client initialization failed: {exc}", file=sys.stderr, flush=True)
-        for task in tasks:
-            emit_block("START", task=task, tickets=0)
-            emit_block(
-                "END",
-                task=task,
-                score=SCORE_EPSILON,
-                steps=0,
-                failed=True,
-                error=_compact_error(exc),
-            )
-        raise
+        print(
+            f"Client initialization failed: {exc}. Running with heuristic fallbacks.",
+            file=sys.stderr,
+            flush=True,
+        )
 
     env = SupportOpsEnv(seed=42)
     for task in tasks:

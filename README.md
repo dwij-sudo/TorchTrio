@@ -8,45 +8,58 @@ app_port: 7860
 pinned: false
 ---
 
-# SupportOpsEnv — AI Customer Support Inbox Simulation
+# SupportOpsEnv — TorchTrio
 
-Production-grade OpenEnv environment that mirrors a SaaS customer support inbox. Agents must classify tickets, draft empathetic responses, escalate critical issues, and set priority correctly. Three graded tasks (easy/medium/hard) with deterministic scoring and shaped rewards.
+SupportOpsEnv — TorchTrio is a realistic SaaS customer support inbox Mini-RL environment built on OpenEnv.
+It evaluates whether an agent can make reliable support decisions end-to-end: classify tickets, craft empathetic responses, escalate when needed, and assign the right priority.
 
-## Real-world motivation
-- Reflects workflows used by support teams handling billing, technical incidents, and general inquiries.
-- Evaluates LLM agents on structured decision-making, not just text generation.
-- Deterministic graders ensure reproducible leaderboard-style evaluation.
+The environment is intentionally deterministic and reproducible, making it suitable for leaderboard-style evaluation and hackathon judging.
 
-## Observation space
-- `ticket_text` (str): customer message.
+## Why this matters
+- Mirrors production support operations across billing, technical incidents, and general customer communication.
+- Tests structured decision quality, not only text fluency.
+- Encourages policy consistency under realistic constraints (sentiment, escalation risk, and action history).
+
+## Real-world impact and business value
+- Faster resolution loops: better first-pass classification and priority assignment can reduce mean resolution time by routing tickets correctly earlier.
+- Better escalation accuracy: penalizing unnecessary escalation while requiring escalation for critical tickets improves tier utilization and incident response quality.
+- Higher customer trust: response grading rewards empathetic tone and concrete next-step communication.
+- Reproducible evaluation: deterministic graders remove ambiguity and make progress measurable across model versions.
+
+## Environment design
+### Observation space
+- `ticket_text` (str): raw customer message.
 - `customer_sentiment` (str): `positive | neutral | negative | angry`.
-- `previous_actions` (List[str]): textual history for the current ticket.
+- `previous_actions` (List[str]): action trace for the current ticket.
 - `current_task` (str): `easy | medium | hard`.
 
-## Action space
+### Action space
 - `classify_ticket`: `category` in {`billing`, `technical`, `general`}.
 - `respond_ticket`: `text` (freeform response).
 - `escalate_ticket`: `level` in {`none`, `tier1`, `tier2`, `tier3`}.
 - `set_priority`: `level` in {`low`, `medium`, `high`, `urgent`}.
 
 ## Tasks
-- **Easy**: classify each ticket.
-- **Medium**: classify and respond with keyword/tone coverage.
-- **Hard**: full workflow—classify, respond, escalate when required, set priority.
+- **Easy**: ticket classification.
+- **Medium**: classification + response quality.
+- **Hard**: full workflow with classification, response, escalation, and priority.
 
-## Reward logic
-- Partial rewards per action; aggregated and clamped to [-1, 1].
-- Penalties: wrong classification, invalid actions, unnecessary escalation, missing required escalation/priority at ticket end.
-- Response grading: keyword coverage + tone (`sorry|apologize|please|thanks`).
-
-## Deterministic graders
-- Classification: exact match.
-- Response: keyword coverage + tone check.
-- Escalation: exact level match; unnecessary escalation penalized.
-- Priority: exact level match.
+## Reward shaping and deterministic grading
+- Partial rewards are weighted by action type and clamped to [-1, 1].
+- Terminal penalties handle missing required escalation/priority and poor workflow completion.
+- Deterministic grader for classification: exact label match.
+- Deterministic grader for response: keyword coverage + empathetic tone check (`sorry|apologize|please|thanks`).
+- Deterministic grader for escalation: exact level match with unnecessary escalation penalties.
+- Deterministic grader for priority: exact level match.
 
 ## Dataset
-Realistic tickets stored in `data/tickets.json` with sentiment, expected category, keywords, escalation, and priority labels.
+Realistic labeled tickets live in `data/tickets.json` with sentiment, expected category, response keywords, escalation level, and priority.
+
+## Model compatibility
+- Works with OpenAI-compatible APIs through `API_BASE_URL` + `MODEL_NAME` + `HF_TOKEN`.
+- Compatible with Llama-family models served from Hugging Face Inference Endpoints / TGI / vLLM, as long as they expose an OpenAI-compatible interface.
+- Default `API_BASE_URL=https://api.openai.com/v1`.
+- Default `MODEL_NAME=gpt-4.1-mini`.
 
 ## Setup
 ```bash
@@ -57,6 +70,7 @@ uvicorn app:app --host 0.0.0.0 --port 7860
 ## Example (Python)
 ```python
 from server.env import SupportOpsEnv
+
 env = SupportOpsEnv(seed=7)
 obs = env.reset(task="medium")
 obs, reward, done, info = env.step({"action_type": "classify_ticket", "category": "billing"})
@@ -66,9 +80,8 @@ obs, reward, done, info = env.step({"action_type": "classify_ticket", "category"
 ```bash
 python inference.py
 ```
-Outputs JSON scores for easy/medium/hard using OpenAI responses (`API_BASE_URL`, `MODEL_NAME`, `HF_TOKEN`).
-Defaults: `API_BASE_URL=https://api.openai.com/v1`, `MODEL_NAME=gpt-4.1-mini`.
-`HF_TOKEN` is required and used as the OpenAI `api_key`.
+The baseline emits per-task `[START]`, `[STEP]`, and `[END]` blocks for `easy`, `medium`, and `hard`.
+`HF_TOKEN` is required and is used as the OpenAI client `api_key`.
 
 ## Docker
 ```bash
@@ -77,8 +90,16 @@ docker run -p 7860:7860 supportopsenv
 ```
 
 ## Hugging Face Spaces
-- Use Docker SDK, set env vars `API_BASE_URL`, `MODEL_NAME`, and set `HF_TOKEN` in Space secrets.
-- See `hf_spaces_guide.md` for deployment steps and endpoint testing.
+- Use Docker SDK.
+- Set environment variables: `API_BASE_URL`, `MODEL_NAME`, `PORT=7860`.
+- Set secret: `HF_TOKEN`.
+- Full deployment guide: `hf_spaces_guide.md`.
 
 ## OpenEnv metadata
-See `openenv.yaml` (entrypoint `server.env:SupportOpsEnv`) for task list and spec fields.
+See `openenv.yaml` (entrypoint `server.env:SupportOpsEnv`) for task metadata and environment schema.
+
+## Grand Finale Extensions
+Potential extensions for the Bangalore finale without changing the current core environment contract:
+- Procedural ticket generation with controlled domain shifts (product updates, outage bursts, seasonal billing spikes).
+- TRL/PPO training example using this environment for policy optimization beyond prompt-only baselines.
+- Multi-ticket batching to benchmark throughput and queue-level decision quality under realistic support load.

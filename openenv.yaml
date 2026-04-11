@@ -1,14 +1,14 @@
 name: SupportOpsEnv
-description: AI Customer Support Inbox Simulation with graded tasks (classification, response, escalation, priority).
+description: Realistic SaaS customer support inbox simulation with deterministic graded tasks (classification, response, escalation, priority).
 version: 1.0.0
 entrypoint: server.env:SupportOpsEnv
 tasks:
   - id: easy
-    description: Ticket classification into billing, technical, general.
+    description: Ticket classification into billing, technical, or general.
   - id: medium
     description: Classification plus customer response quality.
   - id: hard
-    description: Full workflow with classification, response, escalation, and priority.
+    description: Full workflow with classification, response, escalation, and priority decisions.
 observation:
   ticket_text: string
   customer_sentiment: string
